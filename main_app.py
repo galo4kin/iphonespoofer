@@ -110,7 +110,11 @@ def main():
             background_color="#0a0a0f",
             text_select=False,
         )
-        webview.start()
+        # Persist localStorage (onboarding "skip", saved places, theme) across launches.
+        # pywebview defaults to private_mode=True, which wipes web storage on exit.
+        _storage = os.path.expanduser("~/Library/Application Support/iPhone Spoofer/webview")
+        os.makedirs(_storage, exist_ok=True)
+        webview.start(private_mode=False, storage_path=_storage)
     except Exception:
         import webbrowser
         print(f"[*] Opening http://localhost:{PORT}")
