@@ -475,7 +475,7 @@ async function pollRoute() {
 function endRoute() { clearInterval(routePolling); routePolling = null; $("btn-route-start").disabled = false; $("btn-route-stop").disabled = true; $("btn-route-pause").classList.add("hidden"); $("btn-route-resume").classList.add("hidden"); $("route-progress").classList.add("hidden"); if ($("status-route")) $("status-route").classList.add("hidden"); if (routeTraveledLine) { map.removeLayer(routeTraveledLine); routeTraveledLine = null; } stopMovementTracking(); }
 
 // ── Live tracking ───────────────────────────────────────────
-function startMovementTracking() { if (movementPolling) return; movementPolling = setInterval(pollPosition, 500); }
+function startMovementTracking() { if (movementPolling) clearInterval(movementPolling); movementPolling = setInterval(pollPosition, 500); }
 function stopMovementTracking() { if (movementPolling) { clearInterval(movementPolling); movementPolling = null; } trailPoints = []; }
 function setFollow(on) {
     followMode = on;
