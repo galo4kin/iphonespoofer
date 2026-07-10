@@ -658,6 +658,12 @@ body {
     color: var(--text);
     border-color: rgba(139, 92, 246, 0.2);
 }
+.map-btn.active {
+    background: var(--accent-bg);
+    color: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 12px var(--accent-glow);
+}
 
 /* ── Custom Map Marker ──────────────────────────── */
 

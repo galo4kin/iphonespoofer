@@ -65,8 +65,13 @@ def _start_macos(exe, args, log):
     parts = [shlex.quote(exe)] + [shlex.quote(a) for a in args]
     cmd_str = " ".join(parts)
     log_escaped = shlex.quote(log)
+    # Run tunneld in the FOREGROUND of the elevated shell. Backgrounding it with
+    # `nohup ... &` inside `do shell script with administrator privileges` gets the
+    # child reaped when the privileged helper returns (nohup can't detach:
+    # "Inappropriate ioctl for device"). Instead we keep osascript alive as the
+    # parent holding tunneld, and use Popen so Python neither blocks nor kills it.
+    shell_cmd = f"{cmd_str} > {log_escaped} 2>&1"
     # Escape backslashes and double-quotes for AppleScript string literal
-    shell_cmd = f"nohup {cmd_str} > {log_escaped} 2>&1 &"
     shell_cmd_escaped = shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
     script = (
         f'do shell script '
@@ -74,11 +79,11 @@ def _start_macos(exe, args, log):
         f' with administrator privileges'
     )
     try:
-        result = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=120,
-        )
-        return result.returncode == 0
+        # Popen (not run): osascript blocks while tunneld runs in the foreground;
+        # we must not wait on it or kill it. Keep a reference so it is not GC'd.
+        proc = subprocess.Popen(["osascript", "-e", script])
+        globals()["_tunneld_osascript_proc"] = proc
+        return True
     except Exception as e:
         print(f"[!] Failed to start tunnel: {e}")
         return False
@@ -135,7 +140,7 @@ def ensure_tunnel(timeout=30):
 def run_tunneld_directly():
     """Run tunneld in-process (called with --tunneld flag)."""
     from pymobiledevice3.cli.remote import cli
-    sys.argv = ["pymobiledevice3", "remote", "tunneld"]
+    sys.argv = ["pymobiledevice3", "tunneld"]
     try:
         cli(standalone_mode=False)
     except SystemExit:

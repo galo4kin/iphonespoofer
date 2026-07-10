@@ -16,6 +16,7 @@ let coordFormat = localStorage.getItem("coord_fmt") || "dd";
 let lightTheme = localStorage.getItem("theme") === "light";
 let previousLocation = null;
 let followMode = false;
+let startPointLocked = false;
 let movementPolling = null;
 let searchHighlightIndex = -1;
 let routeDistanceKm = 0;
@@ -70,6 +71,25 @@ document.addEventListener("DOMContentLoaded", async () => {
     map = L.map("map", { zoomControl: false }).setView([startLat, startLon], 13);
     tileLayer = L.tileLayer(tileSet.url, { attribution: tileSet.attr, maxZoom: 19, subdomains: "abcd" }).addTo(map);
     map.on("click", onMapClick);
+
+    // Start point priority: (1) last warped location, (2) real Mac CoreLocation, (3) IP geolocation.
+    // (iOS does not expose the phone's real GPS.) Places a marker + fills the coord inputs so there
+    // is a sensible starting point instead of 0.000000 — this does NOT warp the device.
+    const _saved = JSON.parse(localStorage.getItem("lastLocation") || "null");
+    if (_saved && _saved.lat != null && _saved.lon != null) {
+        placeMarker(_saved.lat, _saved.lon);
+        map.setView([_saved.lat, _saved.lon], 13);
+    } else {
+        // Show IP geolocation immediately, then upgrade to the real Mac location if available.
+        placeMarker(startLat, startLon);
+        map.setView([startLat, startLon], 13);
+        fetch("/api/mac-location").then(r => r.ok ? r.json() : null).then(d => {
+            if (d && d.lat != null && !startPointLocked) {
+                placeMarker(d.lat, d.lon);
+                map.setView([d.lat, d.lon], 15);
+            }
+        }).catch(() => {});
+    }
 
     // Core buttons
     $("btn-set").addEventListener("click", setLocation);
@@ -193,7 +213,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     $("btn-connect-wifi").addEventListener("click", () => connectDevice(true));
 
     // Follow mode
-    $("follow-mode")?.addEventListener("change", e => { followMode = e.target.checked; });
+    $("follow-mode")?.addEventListener("change", e => setFollow(e.target.checked));
+    $("btn-follow")?.addEventListener("click", () => setFollow(!followMode));
 
     // Route save
     $("btn-route-save")?.addEventListener("click", saveCurrentRoute);
@@ -240,7 +261,23 @@ function toggleTeleport() { teleportMode = !teleportMode; $("btn-teleport").clas
 function toggleShortcuts() { $("shortcuts-overlay").classList.toggle("hidden"); }
 
 // ── Map ─────────────────────────────────────────────────────
-function onMapClick(e) { if (e.originalEvent.shiftKey || routePoints.length > 0) { addRoutePoint(e.latlng.lat, e.latlng.lng); } else if (teleportMode) { placeMarker(e.latlng.lat, e.latlng.lng); teleportTo(e.latlng.lat, e.latlng.lng); } else { placeMarker(e.latlng.lat, e.latlng.lng); } }
+function onMapClick(e) {
+    startPointLocked = true;
+    if (e.originalEvent.shiftKey || routePoints.length > 0) {
+        // On the first route point, seed the route with the current location (marker / coord
+        // inputs) as point 1 so a single Shift+click builds a "here -> target" 2-point route
+        // and Start enables immediately. Skip if there is no current location yet.
+        if (routePoints.length === 0) {
+            const cLat = parseFloat($("lat-input").value), cLon = parseFloat($("lon-input").value);
+            if (!isNaN(cLat) && !isNaN(cLon)) addRoutePoint(cLat, cLon);
+        }
+        addRoutePoint(e.latlng.lat, e.latlng.lng);
+    } else if (teleportMode) {
+        placeMarker(e.latlng.lat, e.latlng.lng); teleportTo(e.latlng.lat, e.latlng.lng);
+    } else {
+        placeMarker(e.latlng.lat, e.latlng.lng);
+    }
+}
 
 function placeMarker(lat, lng) {
     const icon = L.divIcon({ className: "neon-marker-container", html: '<div class="neon-marker"><div class="neon-marker-pulse"></div><div class="neon-marker-dot"></div></div>', iconSize: [20, 20], iconAnchor: [10, 10] });
@@ -262,7 +299,7 @@ async function setLocation() {
     const lat = parseFloat($("lat-input").value), lon = parseFloat($("lon-input").value);
     if (isNaN(lat) || isNaN(lon)) return toast("Place a marker on the map first", "error");
     storePreviousLocation();
-    try { const r = await fetch("/api/location/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat, lon }) }); const d = await r.json(); if (r.ok) { toast("Location set: " + lat.toFixed(4) + ", " + lon.toFixed(4)); placeMarker(lat, lon); addToRecent(lat, lon); _stealthDismissed = false; checkStealth(); } else toast(d.error || "Failed", "error"); } catch (e) { toast("Connection error", "error"); }
+    try { const r = await fetch("/api/location/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat, lon }) }); const d = await r.json(); if (r.ok) { toast("Location set: " + lat.toFixed(4) + ", " + lon.toFixed(4)); placeMarker(lat, lon); addToRecent(lat, lon); localStorage.setItem("lastLocation", JSON.stringify({ lat, lon })); _stealthDismissed = false; checkStealth(); } else toast(d.error || "Failed", "error"); } catch (e) { toast("Connection error", "error"); }
 }
 
 async function clearLocation() {
@@ -435,6 +472,13 @@ function endRoute() { clearInterval(routePolling); routePolling = null; $("btn-r
 // ── Live tracking ───────────────────────────────────────────
 function startMovementTracking() { if (movementPolling) return; movementPolling = setInterval(pollPosition, 500); }
 function stopMovementTracking() { if (movementPolling) { clearInterval(movementPolling); movementPolling = null; } trailPoints = []; }
+function setFollow(on) {
+    followMode = on;
+    const btn = $("btn-follow"); if (btn) btn.classList.toggle("active", on);
+    const cb = $("follow-mode"); if (cb) cb.checked = on;
+    if (on && marker) map.panTo(marker.getLatLng(), { animate: true, duration: 0.3 });
+}
+
 async function pollPosition() { try { const r = await fetch("/api/location/current"); if (!r.ok) return; const loc = await r.json(); placeMarker(loc.lat, loc.lon); if (followMode) map.panTo([loc.lat, loc.lon], { animate: true, duration: 0.3 }); } catch (e) {} }
 
 // ── GPX ─────────────────────────────────────────────────────

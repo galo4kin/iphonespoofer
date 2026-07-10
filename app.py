@@ -7,6 +7,7 @@ from flask import Flask, jsonify, request, render_template
 from device_manager import DeviceManager
 from location_service import LocationService
 from tunnel_service import is_tunneld_running, ensure_tunnel
+from mac_location import get_mac_location
 
 
 PORT = 8080
@@ -176,6 +177,15 @@ def api_default_location():
         pass
 
     return jsonify({"lat": 40.7128, "lon": -74.006, "city": "New York", "country": "US"})
+
+
+@app.route("/api/mac-location")
+def api_mac_location():
+    """Real Mac location via CoreLocation (best proxy for the phone's real spot)."""
+    loc = get_mac_location()
+    if loc is None:
+        return jsonify({"error": "unavailable"}), 404
+    return jsonify(loc)
 
 
 # ── Stealth / Anti-detection API ──────────────────────────────

@@ -36,25 +36,30 @@ import app as app_module
 
 
 def start_backend():
-    """Initialize tunnel, optional device connection, and Flask server."""
-    # Step 1: Tunnel
-    print("[1/2] Setting up tunnel...")
-    ensure_tunnel(timeout=30)
-
-    # Step 2: Create device manager, try quick auto-connect
+    """Start Flask immediately; set up tunnel + device connection in the background."""
+    # Create device manager up front so routes never see a missing manager
     device_mgr = DeviceManager()
     app_module.device_mgr = device_mgr
     app_module.loc_svc = None
 
-    print("[2/2] Looking for device...")
-    try:
-        device_mgr.connect(retries=3)
-        app_module.loc_svc = LocationService(device_mgr.simulator, device_mgr.bridge)
-        app_module._start_schedule_checker()
-        print("[+] Device connected")
-    except Exception:
-        print("[*] No device yet — connect from the UI")
+    def _setup():
+        # Step 1: Tunnel (may prompt for admin password — runs while the window is already up)
+        print("[1/2] Setting up tunnel...")
+        ensure_tunnel(timeout=30)
 
+        # Step 2: Try quick auto-connect
+        print("[2/2] Looking for device...")
+        try:
+            device_mgr.connect(retries=3)
+            app_module.loc_svc = LocationService(device_mgr.simulator, device_mgr.bridge)
+            app_module._start_schedule_checker()
+            print("[+] Device connected")
+        except Exception:
+            print("[*] No device yet — connect from the UI")
+
+    threading.Thread(target=_setup, daemon=True).start()
+
+    # Flask must be up fast so wait_for_server() succeeds and the window opens
     app.run(host="127.0.0.1", port=PORT, debug=False, use_reloader=False)
 
 

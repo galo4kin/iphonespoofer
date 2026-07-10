@@ -105,6 +105,7 @@ fi
     --add-data "templates:templates" \
     --add-data "static:static" \
     --collect-all pymobiledevice3 \
+    --recursive-copy-metadata pymobiledevice3 \
     --collect-all webview \
     --hidden-import pymobiledevice3.cli.remote \
     --hidden-import pymobiledevice3.remote.tunnel_service \
@@ -155,6 +156,30 @@ cat > "$APP_DIR/Contents/Info.plist" << PLIST
 PLIST
 
 echo "      App bundle created"
+
+# ── 4b. macOS CoreLocation helper (real Mac location as start point) ──
+HELPER_SRC="$SCRIPT_DIR/maclocation/whereami.swift"
+if [ -f "$HELPER_SRC" ] && command -v swiftc &>/dev/null; then
+    echo "      Building location helper..."
+    HELPER_APP="$APP_DIR/Contents/Resources/WhereAmI.app"
+    mkdir -p "$HELPER_APP/Contents/MacOS"
+    swiftc "$HELPER_SRC" -o "$HELPER_APP/Contents/MacOS/WhereAmI" 2>/dev/null || echo "      [!] helper build failed (location start-point disabled)"
+    cat > "$HELPER_APP/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>WhereAmI</string>
+  <key>CFBundleIdentifier</key><string>com.iphonespoofer.whereami</string>
+  <key>CFBundleName</key><string>WhereAmI</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>LSUIElement</key><true/>
+  <key>NSLocationUsageDescription</key><string>Used to set your real location as the spoofing start point.</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>Used to set your real location as the spoofing start point.</string>
+</dict></plist>
+PLIST
+    codesign --force --deep --sign - "$HELPER_APP" 2>/dev/null || true
+fi
 
 # ── 5. DMG ───────────────────────────────────────────────
 echo "[5/5] Creating DMG..."
