@@ -11,6 +11,11 @@ from datetime import datetime
 import requests as http_requests
 
 
+# ── Movement realism (anti-detection) ──────────────────────────
+_GPS_TICK = 1.0        # seconds between GPS samples (~1 Hz, like a real receiver)
+_GPS_NOISE_M = 3.5     # gaussian positional noise stddev in meters
+
+
 # ── Cooldown table (Pokemon Go style) ─────────────────────────
 # (distance_km, cooldown_seconds)
 COOLDOWN_TABLE = [
@@ -79,6 +84,15 @@ class LocationService:
         self._wander_speed = 5
 
     # ── Core ───────────────────────────────────────────────
+
+    @staticmethod
+    def _gps_noise(lat, lon, sigma_m=_GPS_NOISE_M):
+        """Offset a coordinate by gaussian noise (meters) to mimic real GPS scatter."""
+        r = abs(random.gauss(0, sigma_m))
+        ang = random.uniform(0, 2 * math.pi)
+        dlat = (r / 111320) * math.cos(ang)
+        dlon = (r / (111320 * max(math.cos(math.radians(lat)), 0.01))) * math.sin(ang)
+        return lat + dlat, lon + dlon
 
     def _sim_set(self, lat, lon):
         self.bridge.run(self.simulator.set(lat, lon))
@@ -309,21 +323,42 @@ class LocationService:
                     break
 
                 lng, lat = coordinates[i]
-                try:
-                    self._sim_set(lat, lng)
-                except Exception:
-                    pass
-                self.current_location = {"lat": lat, "lon": lng}
-                self._route_progress = ((idx + 1) / total) * 100
 
                 if idx < total - 1:
+                    # Interpolate to the next road node at ~1 Hz so the reported
+                    # speed matches the requested speed instead of teleport-jumping
+                    # sparse OSRM vertices. Add GPS noise + small speed variation so
+                    # the track is not a perfectly straight, constant-speed line.
                     next_i = seq[idx + 1]
                     nlng, nlat = coordinates[next_i]
-                    dist = self._haversine(lat, lng, nlat, nlng)
-                    sleep_time = max(0.1, min(dist / speed_ms if speed_ms > 0 else 0.5, 10.0))
-                    if self._speed_randomize:
-                        sleep_time *= random.uniform(0.8, 1.2)
-                    time.sleep(sleep_time)
+                    seg_dist = self._haversine(lat, lng, nlat, nlng)
+                    seg_speed = speed_ms * (random.uniform(0.82, 1.18) if self._speed_randomize else 1.0)
+                    seg_time = seg_dist / seg_speed if seg_speed > 0 else _GPS_TICK
+                    steps = max(1, int(math.ceil(seg_time / _GPS_TICK)))
+                    for s in range(1, steps + 1):
+                        if not self._route_active:
+                            break
+                        while self._route_paused and self._route_active:
+                            time.sleep(0.2)
+                        frac = s / steps
+                        clat = lat + (nlat - lat) * frac
+                        clng = lng + (nlng - lng) * frac
+                        jlat, jlon = self._gps_noise(clat, clng)
+                        try:
+                            self._sim_set(jlat, jlon)
+                        except Exception:
+                            pass
+                        self.current_location = {"lat": clat, "lon": clng}
+                        self._route_progress = ((idx + frac) / total) * 100
+                        time.sleep(_GPS_TICK * random.uniform(0.9, 1.1))
+                else:
+                    jlat, jlon = self._gps_noise(lat, lng)
+                    try:
+                        self._sim_set(jlat, jlon)
+                    except Exception:
+                        pass
+                    self.current_location = {"lat": lat, "lon": lng}
+                    self._route_progress = ((idx + 1) / total) * 100
 
             iteration += 1
 
@@ -442,7 +477,8 @@ class LocationService:
                 nlat = cur["lat"] + (target_lat - cur["lat"]) * frac
                 nlon = cur["lon"] + (target_lon - cur["lon"]) * frac
                 try:
-                    self._sim_set(nlat, nlon)
+                    jlat, jlon = self._gps_noise(nlat, nlon)
+                    self._sim_set(jlat, jlon)
                     self.current_location = {"lat": nlat, "lon": nlon}
                 except Exception:
                     pass
