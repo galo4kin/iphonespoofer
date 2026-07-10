@@ -3,7 +3,7 @@
 // textContent or DOM creation methods to prevent XSS.
 
 // ── State ────────────────────────────────────────────────────
-let map, marker, routeLine, routeDisplayLine;
+let map, marker, phoneMarker, phonePos = null, routeLine, routeDisplayLine;
 let routePoints = [];
 let routeMarkers = [];
 let routePolling = null;
@@ -76,18 +76,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     // (iOS does not expose the phone's real GPS.) Places a marker + fills the coord inputs so there
     // is a sensible starting point instead of 0.000000 — this does NOT warp the device.
     const _saved = JSON.parse(localStorage.getItem("lastLocation") || "null");
+    const applyStart = (lat, lon, zoom) => { placePhone(lat, lon); updateCoordInputs(lat, lon); map.setView([lat, lon], zoom); };
     if (_saved && _saved.lat != null && _saved.lon != null) {
-        placeMarker(_saved.lat, _saved.lon);
-        map.setView([_saved.lat, _saved.lon], 13);
+        applyStart(_saved.lat, _saved.lon, 13);
     } else {
         // Show IP geolocation immediately, then upgrade to the real Mac location if available.
-        placeMarker(startLat, startLon);
-        map.setView([startLat, startLon], 13);
+        applyStart(startLat, startLon, 13);
         fetch("/api/mac-location").then(r => r.ok ? r.json() : null).then(d => {
-            if (d && d.lat != null && !startPointLocked) {
-                placeMarker(d.lat, d.lon);
-                map.setView([d.lat, d.lon], 15);
-            }
+            if (d && d.lat != null && !startPointLocked) applyStart(d.lat, d.lon, 15);
         }).catch(() => {});
     }
 
@@ -252,7 +248,7 @@ function toggleTheme() { lightTheme = !lightTheme; document.body.classList.toggl
 // ── Coord format ────────────────────────────────────────────
 function toggleCoordFormat() { coordFormat = coordFormat === "dd" ? "dms" : "dd"; localStorage.setItem("coord_fmt", coordFormat); $("btn-coord-fmt").textContent = coordFormat.toUpperCase(); if (marker) { const ll = marker.getLatLng(); updateCoordInputs(ll.lat, ll.lng); } }
 function toDMS(deg, isLon) { const dir = isLon ? (deg >= 0 ? "E" : "W") : (deg >= 0 ? "N" : "S"); deg = Math.abs(deg); const d = Math.floor(deg); const m = Math.floor((deg - d) * 60); const s = ((deg - d - m / 60) * 3600).toFixed(1); return d + "\u00B0" + m + "'" + s + '"' + dir; }
-function updateCoordInputs(lat, lng) { if (coordFormat === "dms") { $("lat-input").value = toDMS(lat, false); $("lon-input").value = toDMS(lng, true); } else { $("lat-input").value = lat.toFixed(6); $("lon-input").value = lng.toFixed(6); } if ($("coord-text")) $("coord-text").textContent = lat.toFixed(6) + ", " + lng.toFixed(6); }
+function updateCoordInputs(lat, lng) { if (coordFormat === "dms") { $("lat-input").value = toDMS(lat, false); $("lon-input").value = toDMS(lng, true); } else { $("lat-input").value = lat.toFixed(6); $("lon-input").value = lng.toFixed(6); } }
 
 // ── Teleport ────────────────────────────────────────────────
 function toggleTeleport() { teleportMode = !teleportMode; $("btn-teleport").classList.toggle("active", teleportMode); toast(teleportMode ? "Teleport ON \u2014 click map to move instantly" : "Teleport OFF", teleportMode ? "success" : "error"); }
@@ -267,23 +263,32 @@ function onMapClick(e) {
         // On the first route point, seed the route with the current location (marker / coord
         // inputs) as point 1 so a single Shift+click builds a "here -> target" 2-point route
         // and Start enables immediately. Skip if there is no current location yet.
-        if (routePoints.length === 0) {
-            const cLat = parseFloat($("lat-input").value), cLon = parseFloat($("lon-input").value);
-            if (!isNaN(cLat) && !isNaN(cLon)) addRoutePoint(cLat, cLon);
+        if (routePoints.length === 0 && phonePos) {
+            addRoutePoint(phonePos.lat, phonePos.lon);
         }
         addRoutePoint(e.latlng.lat, e.latlng.lng);
     } else if (teleportMode) {
-        placeMarker(e.latlng.lat, e.latlng.lng); teleportTo(e.latlng.lat, e.latlng.lng);
+        teleportTo(e.latlng.lat, e.latlng.lng);
     } else {
         placeMarker(e.latlng.lat, e.latlng.lng);
     }
 }
 
 function placeMarker(lat, lng) {
+    // Target pin (where the user clicked / will Warp to). Does NOT move the phone.
     const icon = L.divIcon({ className: "neon-marker-container", html: '<div class="neon-marker"><div class="neon-marker-pulse"></div><div class="neon-marker-dot"></div></div>', iconSize: [20, 20], iconAnchor: [10, 10] });
     if (marker) { marker.setLatLng([lat, lng]); } else { marker = L.marker([lat, lng], { icon: icon }).addTo(map); }
-    trailPoints.push([lat, lng]); if (trailPoints.length > 20) trailPoints.shift();
     updateCoordInputs(lat, lng); updateStatusBar();
+}
+
+function placePhone(lat, lng) {
+    // Blue dot = the phone's actual current location. Moves only on Warp/Teleport/route/arrows.
+    const icon = L.divIcon({ className: "phone-marker-container", html: '<div class="phone-marker"><div class="phone-marker-pulse"></div><div class="phone-marker-dot"></div></div>', iconSize: [22, 22], iconAnchor: [11, 11] });
+    if (phoneMarker) { phoneMarker.setLatLng([lat, lng]); } else { phoneMarker = L.marker([lat, lng], { icon: icon, zIndexOffset: 1000 }).addTo(map); }
+    phonePos = { lat: lat, lon: lng };
+    trailPoints.push([lat, lng]); if (trailPoints.length > 20) trailPoints.shift();
+    if ($("coord-text")) $("coord-text").textContent = lat.toFixed(6) + ", " + lng.toFixed(6);
+    updateStatusBar();
 }
 
 function toggleTiles() { darkTiles = !darkTiles; const t = darkTiles ? TILES.dark : TILES.light; map.removeLayer(tileLayer); tileLayer = L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19, subdomains: "abcd" }).addTo(map); }
@@ -291,7 +296,7 @@ function toggleTiles() { darkTiles = !darkTiles; const t = darkTiles ? TILES.dar
 // ── Teleport to ─────────────────────────────────────────────
 async function teleportTo(lat, lon) {
     storePreviousLocation();
-    try { const r = await fetch("/api/location/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat, lon }) }); if (r.ok) { toast("Teleported to " + lat.toFixed(4) + ", " + lon.toFixed(4)); addToRecent(lat, lon); _stealthDismissed = false; checkStealth(); } else { const d = await r.json(); toast(d.error || "Failed", "error"); } } catch (e) { toast("Connection error", "error"); }
+    try { const r = await fetch("/api/location/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat, lon }) }); if (r.ok) { toast("Teleported to " + lat.toFixed(4) + ", " + lon.toFixed(4)); placePhone(lat, lon); addToRecent(lat, lon); localStorage.setItem("lastLocation", JSON.stringify({ lat, lon })); _stealthDismissed = false; checkStealth(); } else { const d = await r.json(); toast(d.error || "Failed", "error"); } } catch (e) { toast("Connection error", "error"); }
 }
 
 // ── Location set/clear ──────────────────────────────────────
@@ -299,18 +304,18 @@ async function setLocation() {
     const lat = parseFloat($("lat-input").value), lon = parseFloat($("lon-input").value);
     if (isNaN(lat) || isNaN(lon)) return toast("Place a marker on the map first", "error");
     storePreviousLocation();
-    try { const r = await fetch("/api/location/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat, lon }) }); const d = await r.json(); if (r.ok) { toast("Location set: " + lat.toFixed(4) + ", " + lon.toFixed(4)); placeMarker(lat, lon); addToRecent(lat, lon); localStorage.setItem("lastLocation", JSON.stringify({ lat, lon })); _stealthDismissed = false; checkStealth(); } else toast(d.error || "Failed", "error"); } catch (e) { toast("Connection error", "error"); }
+    try { const r = await fetch("/api/location/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat, lon }) }); const d = await r.json(); if (r.ok) { toast("Location set: " + lat.toFixed(4) + ", " + lon.toFixed(4)); placePhone(lat, lon); addToRecent(lat, lon); localStorage.setItem("lastLocation", JSON.stringify({ lat, lon })); _stealthDismissed = false; checkStealth(); } else toast(d.error || "Failed", "error"); } catch (e) { toast("Connection error", "error"); }
 }
 
 async function clearLocation() {
-    try { const r = await fetch("/api/location/clear", { method: "POST" }); if (r.ok) { toast("Reset to real GPS"); if (marker) { map.removeLayer(marker); marker = null; } $("lat-input").value = ""; $("lon-input").value = ""; if ($("coord-text")) $("coord-text").textContent = "Click map to set location"; } else { const d = await r.json().catch(() => ({})); toast(d.error || "Failed to reset", "error"); } } catch (e) { toast("Connection error", "error"); }
+    try { const r = await fetch("/api/location/clear", { method: "POST" }); if (r.ok) { toast("Reset to real GPS"); if (marker) { map.removeLayer(marker); marker = null; } if (phoneMarker) { map.removeLayer(phoneMarker); phoneMarker = null; } phonePos = null; $("lat-input").value = ""; $("lon-input").value = ""; if ($("coord-text")) $("coord-text").textContent = "Click map to set location"; } else { const d = await r.json().catch(() => ({})); toast(d.error || "Failed to reset", "error"); } } catch (e) { toast("Connection error", "error"); }
 }
 
 // ── Undo ────────────────────────────────────────────────────
 function storePreviousLocation() { const lat = parseFloat($("lat-input").value), lon = parseFloat($("lon-input").value); if (!isNaN(lat) && !isNaN(lon)) { previousLocation = { lat, lon }; $("btn-undo").disabled = false; $("btn-undo").title = "Undo to " + lat.toFixed(4) + ", " + lon.toFixed(4); } }
 async function undoTeleport() {
     if (!previousLocation) return toast("No previous location", "error");
-    try { const r = await fetch("/api/location/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(previousLocation) }); if (r.ok) { toast("Undone \u2014 back to " + previousLocation.lat.toFixed(4) + ", " + previousLocation.lon.toFixed(4)); placeMarker(previousLocation.lat, previousLocation.lon); map.flyTo([previousLocation.lat, previousLocation.lon], map.getZoom(), { duration: 0.8 }); previousLocation = null; $("btn-undo").disabled = true; $("btn-undo").title = "No previous location"; } } catch (e) { toast("Undo failed", "error"); }
+    try { const r = await fetch("/api/location/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(previousLocation) }); if (r.ok) { toast("Undone \u2014 back to " + previousLocation.lat.toFixed(4) + ", " + previousLocation.lon.toFixed(4)); placePhone(previousLocation.lat, previousLocation.lon); map.flyTo([previousLocation.lat, previousLocation.lon], map.getZoom(), { duration: 0.8 }); previousLocation = null; $("btn-undo").disabled = true; $("btn-undo").title = "No previous location"; } } catch (e) { toast("Undo failed", "error"); }
 }
 
 // ── Paste ───────────────────────────────────────────────────
@@ -476,10 +481,10 @@ function setFollow(on) {
     followMode = on;
     const btn = $("btn-follow"); if (btn) btn.classList.toggle("active", on);
     const cb = $("follow-mode"); if (cb) cb.checked = on;
-    if (on && marker) map.panTo(marker.getLatLng(), { animate: true, duration: 0.3 });
+    if (on && phoneMarker) map.panTo(phoneMarker.getLatLng(), { animate: true, duration: 0.3 });
 }
 
-async function pollPosition() { try { const r = await fetch("/api/location/current"); if (!r.ok) return; const loc = await r.json(); placeMarker(loc.lat, loc.lon); if (followMode) map.panTo([loc.lat, loc.lon], { animate: true, duration: 0.3 }); } catch (e) {} }
+async function pollPosition() { try { const r = await fetch("/api/location/current"); if (!r.ok) return; const loc = await r.json(); placePhone(loc.lat, loc.lon); if (followMode) map.panTo([loc.lat, loc.lon], { animate: true, duration: 0.3 }); } catch (e) {} }
 
 // ── GPX ─────────────────────────────────────────────────────
 async function importGPX() { const file = $("gpx-file").files[0]; if (!file) return; const fd = new FormData(); fd.append("file", file); try { const r = await fetch("/api/gpx/import", { method: "POST", body: fd }); const d = await r.json(); if (!r.ok) return toast(d.error || "Import failed", "error"); clearRoutePoints(); d.waypoints.forEach(wp => addRoutePoint(wp.lat, wp.lng)); if (d.waypoints.length > 0) map.flyTo([d.waypoints[0].lat, d.waypoints[0].lng], 14); toast("Imported " + d.count + " waypoints"); } catch (e) { toast("Import failed", "error"); } $("gpx-file").value = ""; }
@@ -505,9 +510,9 @@ async function joystickMove(direction) { const speed = parseInt($("speed-input")
 async function joystickStop() { document.querySelectorAll(".joy-btn").forEach(b => b.classList.remove("active")); stopMovementTracking(); try { await fetch("/api/joystick/stop", { method: "POST" }); } catch (e) {} }
 
 // ── Wander ──────────────────────────────────────────────────
-async function startWander() { const lat = parseFloat($("lat-input").value), lon = parseFloat($("lon-input").value); if (isNaN(lat) || isNaN(lon)) return toast("Set a location first", "error"); const radius = parseInt($("wander-radius").value, 10) || 200; const speed = parseInt($("speed-input").value, 10) || selectedSpeed; try { const r = await fetch("/api/wander/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat, lon, radius, speed }) }); const d = await r.json(); if (r.ok) { $("btn-wander-start").disabled = true; $("btn-wander-stop").disabled = false; toast("Wandering within " + radius + "m"); startMovementTracking(); } else toast(d.error || "Failed", "error"); } catch (e) { toast("Error", "error"); } }
+async function startWander() { const lat = phonePos ? phonePos.lat : parseFloat($("lat-input").value), lon = phonePos ? phonePos.lon : parseFloat($("lon-input").value); if (isNaN(lat) || isNaN(lon)) return toast("Set a location first", "error"); const radius = parseInt($("wander-radius").value, 10) || 200; const speed = parseInt($("speed-input").value, 10) || selectedSpeed; try { const r = await fetch("/api/wander/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat, lon, radius, speed }) }); const d = await r.json(); if (r.ok) { $("btn-wander-start").disabled = true; $("btn-wander-stop").disabled = false; toast("Wandering within " + radius + "m"); startMovementTracking(); } else toast(d.error || "Failed", "error"); } catch (e) { toast("Error", "error"); } }
 async function stopWander() { try { await fetch("/api/wander/stop", { method: "POST" }); $("btn-wander-start").disabled = false; $("btn-wander-stop").disabled = true; toast("Wander stopped"); stopMovementTracking(); } catch (e) { toast("Error", "error"); } }
-async function generateCircularRoute() { const lat = parseFloat($("lat-input").value), lon = parseFloat($("lon-input").value); if (isNaN(lat) || isNaN(lon)) return toast("Set a location first", "error"); const radius = parseInt($("wander-radius").value, 10) || 200; try { const r = await fetch("/api/route/circular", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat, lon, radius }) }); const d = await r.json(); if (r.ok) { clearRoutePoints(); d.waypoints.forEach(wp => addRoutePoint(wp.lat, wp.lng)); toast("Circular route: " + d.count + " points"); } else toast(d.error || "Failed", "error"); } catch (e) { toast("Error", "error"); } }
+async function generateCircularRoute() { const lat = phonePos ? phonePos.lat : parseFloat($("lat-input").value), lon = phonePos ? phonePos.lon : parseFloat($("lon-input").value); if (isNaN(lat) || isNaN(lon)) return toast("Set a location first", "error"); const radius = parseInt($("wander-radius").value, 10) || 200; try { const r = await fetch("/api/route/circular", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat, lon, radius }) }); const d = await r.json(); if (r.ok) { clearRoutePoints(); d.waypoints.forEach(wp => addRoutePoint(wp.lat, wp.lng)); toast("Circular route: " + d.count + " points"); } else toast(d.error || "Failed", "error"); } catch (e) { toast("Error", "error"); } }
 
 // ── Cooldown ────────────────────────────────────────────────
 async function pollCooldown() {
