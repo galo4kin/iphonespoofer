@@ -472,7 +472,7 @@ async function pollRoute() {
     } catch (e) {}
 }
 
-function endRoute() { clearInterval(routePolling); routePolling = null; $("btn-route-start").disabled = false; $("btn-route-stop").disabled = true; $("btn-route-pause").classList.add("hidden"); $("btn-route-resume").classList.add("hidden"); $("route-progress").classList.add("hidden"); if ($("status-route")) $("status-route").classList.add("hidden"); if (routeTraveledLine) { map.removeLayer(routeTraveledLine); routeTraveledLine = null; } stopMovementTracking(); }
+function endRoute() { clearInterval(routePolling); routePolling = null; $("btn-route-start").disabled = false; $("btn-route-stop").disabled = true; $("btn-route-pause").classList.add("hidden"); $("btn-route-resume").classList.add("hidden"); $("route-progress").classList.add("hidden"); if ($("status-route")) $("status-route").classList.add("hidden"); if (routeTraveledLine) { map.removeLayer(routeTraveledLine); routeTraveledLine = null; } stopMovementTracking(); clearRoutePoints(); }
 
 // ── Live tracking ───────────────────────────────────────────
 function startMovementTracking() { if (movementPolling) clearInterval(movementPolling); movementPolling = setInterval(pollPosition, 500); }
